@@ -22,117 +22,184 @@
     .\Get-ShareAndNtfsPermissions.ps1 -SystemList (Get-Content systems.txt)
     This command attempts to pull all system names (recommend FQDN) listed in the systems.txt file.  It performs no Active Directory discovery lookups.
 .NOTES
-    Version 0.02
+    Version 0.03
     Author: Sam Pursglove
-    Last modified: 05 May 2025
+    Last modified: 18 May 2026
 #>
 
-[CmdletBinding(DefaultParameterSetName='Domain')]
+[CmdletBinding(DefaultParameterSetName='List')]
 param (
-    [Parameter(ParameterSetName='Domain', Mandatory=$False, HelpMessage='Target OU name')]
-    [Parameter(ParameterSetName='Migrated', Mandatory=$True, HelpMessage='Target OU name')]
-    [string]$OUName = '',
+    [Parameter(ParameterSetName='List', Mandatory=$True, ValueFromPipeline=$False, HelpMessage="Enter the list of fully qualified domain name systems (e.g. 'svr1.domain.com','svr2.domain.com')")]
+    [Parameter(ParameterSetName='ListShareOnly', Mandatory=$True, ValueFromPipeline=$False, HelpMessage="Enter the list of fully qualified domain name systems (e.g. 'svr1.domain.com','svr2.domain.com')")]
+    [Parameter(ParameterSetName='ListNtfsOnly', Mandatory=$True, ValueFromPipeline=$False, HelpMessage="Enter the list of fully qualified domain name systems (e.g. 'svr1.domain.com','svr2.domain.com')")]
+    [string[]]$SystemList = '',
 
-    [Parameter(ParameterSetName='Migrated', Mandatory=$True, HelpMessage='Switch to change the search type for AD migrated systems')]
-    [Switch]$Migrated,
+    [Parameter(ParameterSetName='Group', Mandatory=$True, ValueFromPipeline=$False, HelpMessage="Enter the group name of computer objects to enumerate")]
+    [Parameter(ParameterSetName='GroupShareOnly', Mandatory=$True, ValueFromPipeline=$False, HelpMessage="Enter the group name of computer objects to enumerate")]
+    [Parameter(ParameterSetName='GroupNtfsOnly', Mandatory=$True, ValueFromPipeline=$False, HelpMessage="Enter the group name of computer objects to enumerate")]
+    [string[]]$GroupMembers = '',
 
-    [Parameter(ParameterSetName='Migrated', Mandatory=$True, HelpMessage='Target region name')]
-    [string]$Region = '',
+    [Parameter(ParameterSetName='Computers', Mandatory=$True, ValueFromPipeline=$False, HelpMessage="Query all computer objects based on a distinguised name search base")]
+    [Parameter(ParameterSetName='ComputersShareOnly', Mandatory=$True, ValueFromPipeline=$False, HelpMessage="Query all computer objects based on a distinguised name search base")]
+    [Parameter(ParameterSetName='ComputersNtfsOnly', Mandatory=$True, ValueFromPipeline=$False, HelpMessage="Query all computer objects based on a distinguised name search base")]
+    [switch]$Computers,
 
-    [Parameter(ParameterSetName='Domain', Mandatory=$False, HelpMessage='Domain searchbase')]
-    [Parameter(ParameterSetName='Migrated', Mandatory=$True, HelpMessage='Domain searchbase')]
+    [Parameter(ParameterSetName='Computers', Mandatory=$True, HelpMessage='Domain searchbase')]
+    [Parameter(ParameterSetName='ComputersShareOnly', Mandatory=$True, HelpMessage='Domain searchbase')]
+    [Parameter(ParameterSetName='ComputersNtfsOnly', Mandatory=$True, HelpMessage='Domain searchbase')]
     [string]$SearchBase = '',
 
-    [Parameter(ParameterSetName='Domain', Mandatory=$False, HelpMessage='Domain controller server')]
-    [Parameter(ParameterSetName='Migrated', Mandatory=$True, HelpMessage='Domain controller server')]
+    [Parameter(ParameterSetName='Group', Mandatory=$False, HelpMessage='Target domain')]
+    [Parameter(ParameterSetName='GroupShareOnly', Mandatory=$False, HelpMessage='Target domain')]
+    [Parameter(ParameterSetName='GroupNtfsOnly', Mandatory=$False, HelpMessage='Target domain')]
+    [Parameter(ParameterSetName='Computers', Mandatory=$False, HelpMessage='Target domain')]
+    [Parameter(ParameterSetName='ComputersShareOnly', Mandatory=$False, HelpMessage='Target domain')]
+    [Parameter(ParameterSetName='ComputersNtfsOnly', Mandatory=$False, HelpMessage='Target domain')]
     [string]$Server = '',
 
-    [Parameter(ParameterSetName='List', Mandatory=$True, ValueFromPipeline=$False, HelpMessage="Enter the list of fully qualified domain name systems (e.g. 'svr1.domain.com','svr2.domain.com')")]
-    [string[]]$SystemList = ''
+    [Parameter(ParameterSetName='ListShareOnly',Mandatory=$False, HelpMessage='Only collect the share permissions of SMB shares.')]
+    [Parameter(ParameterSetName='GroupShareOnly',Mandatory=$False, HelpMessage='Only collect the share permissions of SMB shares.')]
+    [Parameter(ParameterSetName='ComputersShareOnly',Mandatory=$False, HelpMessage='Only collect the share permissions of SMB shares.')]
+    [switch]$SharePermissionsOnly,
+
+    [Parameter(ParameterSetName='ListNtfsOnly',Mandatory=$False, HelpMessage='Only collect the NTFS permissions of SMB shares.')]
+    [Parameter(ParameterSetName='GroupNtfsOnly',Mandatory=$False, HelpMessage='Only collect the NTFS permissions of SMB shares.')]
+    [Parameter(ParameterSetName='ComputersNtfsOnly',Mandatory=$False, HelpMessage='Only collect the NTFS permissions of SMB shares.')]
+    [switch]$NtfsPermissionsOnly
 )
 
-# SMB shares
-$shares = foreach ($system in $systemList) {
-    Get-SmbShare -CimSession $system -IncludeHidden
-}
+
 
 # Share permissions
-$smbOut = foreach($share in $shares) {
-    $sharePath  = $share | Get-SmbShareAccess
+function Get-SmbSharePermissions {
+    param($shares)
 
-    foreach($path in $sharePath) {
-        [pscustomobject]@{
-            PSComputerName       = $($path.PSComputerName)
-            Name                 = $($path.Name)
-            AccessControlType    = $($path.AccessControlType)
-            AccessRight          = $($path.AccessRight)
-            Path                 = $($Share.Path)
-            Description          = $($Share.Description)
-            ShareType            = $($Share.ShareType)
-            ShareState           = $($Share.ShareState)
-            EncryptData          = $($Share.EncryptData)
-            CurrentUsers         = $($Share.CurrentUsers)
-            FolderEnumerationMode= $($Share.FolderEnumerationMode)
+    $smbOut = foreach($share in $shares) {
+        $sharePath  = $share | Get-SmbShareAccess
+
+        foreach($path in $sharePath) {
+            [pscustomobject]@{
+                PSComputerName       = $($path.PSComputerName)
+                Name                 = $($path.Name)
+                AccessControlType    = $($path.AccessControlType)
+                AccessRight          = $($path.AccessRight)
+                Path                 = $($Share.Path)
+                Description          = $($Share.Description)
+                ShareType            = $($Share.ShareType)
+                ShareState           = $($Share.ShareState)
+                EncryptData          = $($Share.EncryptData)
+                CurrentUsers         = $($Share.CurrentUsers)
+                FolderEnumerationMode= $($Share.FolderEnumerationMode)
+            }
         }
-    }
-} 
+    } 
 
-$smbOut | Export-Csv -Path SmbSharePermissions.csv -NoTypeInformation
+    $smbOut
+}
 
 
 # NTFS permissions
-$accessMask = [ordered]@{
-    [int32]'0x80000000' = 'GenericRead'
-    [int32]'0x40000000' = 'GenericWrite'
-    [int32]'0x20000000' = 'GenericExecute'
-    [int32]'0x10000000' = 'GenericAll'
-    [int32]'0x02000000' = 'MaximumAllowed'
-    [int32]'0x01000000' = 'AccessSystemSecurity'
-    [int32]'0x00100000' = 'Synchronize'
-    [int32]'0x00080000' = 'WriteOwner'
-    [int32]'0x00040000' = 'WriteDAC'
-    [int32]'0x00020000' = 'ReadControl'
-    [int32]'0x00010000' = 'Delete'
-    [int32]'0x00000100' = 'WriteAttributes'
-    [int32]'0x00000080' = 'ReadAttributes'
-    [int32]'0x00000040' = 'DeleteChild'
-    [int32]'0x00000020' = 'Execute/Traverse'
-    [int32]'0x00000010' = 'WriteExtendedAttributes'
-    [int32]'0x00000008' = 'ReadExtendedAttributes'
-    [int32]'0x00000004' = 'AppendData/AddSubdirectory'
-    [int32]'0x00000002' = 'WriteData/AddFile'
-    [int32]'0x00000001' = 'ReadData/ListDirectory'
-}
+function Get-SmbNtfsPermissions {
+    param($shares)
 
-$accesses = $shares | 
-    Where-Object {$_.ShareType -eq 'FileSystemDirectory'} | 
-    ForEach-Object { 
-       "\\$($_.PSComputerName)\$($_.Name)" | Get-Acl
+    $accessMask = [ordered]@{
+        [int32]'0x80000000' = 'GenericRead'
+        [int32]'0x40000000' = 'GenericWrite'
+        [int32]'0x20000000' = 'GenericExecute'
+        [int32]'0x10000000' = 'GenericAll'
+        [int32]'0x02000000' = 'MaximumAllowed'
+        [int32]'0x01000000' = 'AccessSystemSecurity'
+        [int32]'0x00100000' = 'Synchronize'
+        [int32]'0x00080000' = 'WriteOwner'
+        [int32]'0x00040000' = 'WriteDAC'
+        [int32]'0x00020000' = 'ReadControl'
+        [int32]'0x00010000' = 'Delete'
+        [int32]'0x00000100' = 'WriteAttributes'
+        [int32]'0x00000080' = 'ReadAttributes'
+        [int32]'0x00000040' = 'DeleteChild'
+        [int32]'0x00000020' = 'Execute/Traverse'
+        [int32]'0x00000010' = 'WriteExtendedAttributes'
+        [int32]'0x00000008' = 'ReadExtendedAttributes'
+        [int32]'0x00000004' = 'AppendData/AddSubdirectory'
+        [int32]'0x00000002' = 'WriteData/AddFile'
+        [int32]'0x00000001' = 'ReadData/ListDirectory'
     }
 
-$ntfsOut = foreach($access in $accesses) {
-    
-    foreach($permission in ($access.Access)) {
+    $accesses = $shares | 
+        Where-Object {$_.ShareType -eq 'FileSystemDirectory'} | 
+        ForEach-Object {
+            try {
+                $computer = $_.PSComputerName
+                $currentShare = $_.Name
+                "\\$computer\$currentShare" | Get-Acl -ErrorAction Stop
+            } catch [UnauthorizedAccessException] {
+                [pscustomobject]@{
+                    AccessDenied     = $true
+                    PSComputerName   = $computer
+                    Path             = $currentShare
+                }  
+            } 
+        }
+
+    $ntfsOut = foreach($access in $accesses) {
+        if($access.GetType().Name -ne 'PSCustomObject') {
+            foreach($permission in ($access.Access)) {
          
-        if($permission.FileSystemRights -match "[-0-9]+") {                  
-            $fileSystemRights = ($accessMask.Keys | Where-Object {$permission.FileSystemRights.Value__ -band $_ } | ForEach-Object { $accessMask.($_) } ) -join ', '
-        } else {
-            $fileSystemRights = $permission.FileSystemRights
-        }
+                if($permission.FileSystemRights -match "[-0-9]+") {                  
+                    $fileSystemRights = ($accessMask.Keys | Where-Object {$permission.FileSystemRights.Value__ -band $_ } | ForEach-Object { $accessMask.($_) } ) -join ', '
+                } else {
+                    $fileSystemRights = $permission.FileSystemRights
+                }
 
-        [pscustomobject]@{
-            PSComputerName   = ($access.Path -replace 'Microsoft.PowerShell.Core\\FileSystem::\\\\','').Split('\')[0]
-            Path             = ($access.Path -replace 'Microsoft.PowerShell.Core\\FileSystem::\\\\','').Split('\')[1]
-            Owner            = $access.Owner
-            Group            = $access.Group
-            Identity         = $permission.IdentityReference
-            Access           = $permission.AccessControlType
-            Rights           = $fileSystemRights            
-            IsInherited      = $permission.IsInherited
-            InheritanceFlags = $permission.InheritanceFlags
-            PropagationFlags = $permission.PropagationFlags
+                [pscustomobject]@{
+                    PSComputerName   = ($access.Path -replace 'Microsoft.PowerShell.Core\\FileSystem::\\\\','').Split('\')[0]
+                    Path             = ($access.Path -replace 'Microsoft.PowerShell.Core\\FileSystem::\\\\','').Split('\')[1]
+                    Owner            = $access.Owner
+                    Group            = $access.Group
+                    Identity         = $permission.IdentityReference
+                    Access           = $permission.AccessControlType
+                    Rights           = $fileSystemRights            
+                    IsInherited      = $permission.IsInherited
+                    InheritanceFlags = $permission.InheritanceFlags
+                    PropagationFlags = $permission.PropagationFlags
+                }
+            } 
+        } else {       
+            [pscustomobject]@{
+                PSComputerName   = $access.PSComputerName
+                Path             = $access.Path
+                Owner            = 'Access denied'
+                Group            = 'Access denied'
+                Identity         = 'Access denied'
+                Access           = 'Access denied'
+                Rights           = 'Access denied'
+                IsInherited      = 'Access denied'
+                InheritanceFlags = 'Access denied'
+                PropagationFlags = 'Access denied'
+            }
         }
+    }
+
+    $ntfsOut
+}
+
+# Get SMB shares
+$shares = foreach ($system in $systemList) {
+    try {
+        Get-SmbShare -CimSession $system -IncludeHidden
+    } catch [Microsoft.PowerShell.Cmdletization.Cim.CimJobException] {
+        Write-Output "SMB access denied: $($system)"
     }
 }
 
-$ntfsOut | Export-Csv -Path NtfsSharePermissions.csv -NoTypeInformation
+if(-not $NtfsPermissionsOnly) {
+    if($out = Get-SmbSharePermissions $shares) {
+        $out | Export-Csv -Path SmbSharePermissions.csv -NoTypeInformation
+    }
+}
+
+if(-not $SharePermissionsOnly) {
+    if($out = Get-SmbNtfsPermissions $shares) {       
+        $out | Export-Csv -Path NtfsSharePermissions.csv -NoTypeInformation
+    }
+}
