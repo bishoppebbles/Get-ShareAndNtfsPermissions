@@ -1,32 +1,46 @@
 ﻿<#
 .SYNOPSIS
-    Collects share and NTFS permissions of SMB network shares.
+    Collect share and NTFS permissions of SMB network shares.
 .DESCRIPTION
-    
+    Script to collection SMB share and NTFS permissions for remoted systems.  Privileged access is required for the targets.  By default collection is performed using PowerShell remoting but an option exists to alternatively collect using CIM sessions.  Targets can be designated using three different options.  1) User defined list of FQDN system names 2) An AD security group of AD computer objects 3) A domain of all computer objects or sub-organizational unit (OU).
 .PARAMETER SystemList
-    The list of fully qualified domain systems to collect.
+    Query target AD computer object permissions based on a user defined list of fully qualified domain name (FQDN) systems.
 .PARAMETER GroupMembers
-    
+    Query target AD computer object permissions based on the membership of a group.
 .PARAMETER Computers
-    
+    Query target AD computer object permissions based on a domain or sub-organizational units.
 .PARAMETER SearchBase
-    The top level distinguished name path to use for computer object searching.
+    The top level distinguished name path to use for computer object searching, can include sub-organizational units.
 .PARAMETER Server
     The server to use for the target domain.
 .PARAMETER CimSession
-
+    Alternate remote collection option (instead of PowerShell remoting) using the Get-SmbShare cmdlet with CIM sessions.
 .PARAMETER LimitCollection
-    
-.EXAMPLE
-    .\Get-ShareAndNtfsPermissions.ps1
-    
+    Option to collection either share or NTFS permissions, but not both.
+.PARAMETER AltSmartCardCred
+    An option to use alternate smart card credentials for PowerShell remoting sessions.    
 .EXAMPLE
     .\Get-ShareAndNtfsPermissions.ps1 -SystemList (Get-Content systems.txt)
-    This command attempts to pull all system names (recommend FQDN) listed in the systems.txt file.  It performs no Active Directory discovery lookups.
+    Attempts to query all system SMB share and NTFS permissions (recommend FQDN) listed in the systems.txt file.  It performs no Active Directory discovery lookups.
+.EXAMPLE
+    .\Get-ShareAndNtfsPermissions.ps1 -SystemList (Get-Content systems.txt) -CimSession
+    Attempts to query all system SMB share and NTFS permissions (recommend FQDN) listed in the systems.txt file using CIM sessions instead of PowerShell remoting.  It performs no Active Directory discovery lookups.
+.EXAMPLE
+    .\Get-ShareAndNtfsPermissions.ps1 -GroupMembers 'Servers Group' -Server domain.com
+    Attempts to query all AD computer object SMB share and NTFS permissions that are members of the security group 'Servers Group' and in the domain.com domain.
+.EXAMPLE
+    .\Get-ShareAndNtfsPermissions.ps1 -GroupMembers 'Servers Group' -Server domain.com -AltSmartCardCred
+    Attempts to query all AD computer object SMB share and NTFS permissions that are members of the security group 'Servers Group' and in the domain.com domain.  Will prompt the user to use alternative smartcard certificate/PIN that is different than the current user context and will be used for remote session connectivity.
+.EXAMPLE
+    .\Get-ShareAndNtfsPermissions.ps1 -Computers -SearchBase 'ou=servers,dc=domain,dc=com'
+    Attempts to query all AD computer object SMB share and NTFS permissions that are in the 'servers' OU.
+.EXAMPLE
+    .\Get-ShareAndNtfsPermissions.ps1 -Computers -SearchBase 'ou=servers,dc=domain,dc=com' -LimitCollection NtfsOnly
+    Attempts to query all AD computer object SMB NTFS permissions only that are in the 'servers' OU.
 .NOTES
-    Version 0.04
+    Version 0.05
     Author: Sam Pursglove
-    Last modified: 19 May 2026
+    Last modified: 03 June 2026
 #>
 
 [CmdletBinding(DefaultParameterSetName='List')]
@@ -37,10 +51,10 @@ param (
 
     [Parameter(ParameterSetName='Group', Mandatory=$True, ValueFromPipeline=$False, HelpMessage='Enter the group name of computer objects to enumerate.')]
     [Parameter(ParameterSetName='GroupCIM', Mandatory=$True, ValueFromPipeline=$False, HelpMessage='Enter the group name of computer objects to enumerate.')]
-    [string[]]$GroupMembers = '',
+    [string]$GroupMembers = '',
 
-    [Parameter(ParameterSetName='Computers', Mandatory=$True, ValueFromPipeline=$False, HelpMessage='Query all computer objects based on a distinguised name search base path.')]
-    [Parameter(ParameterSetName='ComputersCIM', Mandatory=$True, ValueFromPipeline=$False, HelpMessage='Query all computer objects based on a distinguised name search base path.')]
+    [Parameter(ParameterSetName='Computers', Mandatory=$True, ValueFromPipeline=$False, HelpMessage='Query all computer objects based on a distinguished name search base path.')]
+    [Parameter(ParameterSetName='ComputersCIM', Mandatory=$True, ValueFromPipeline=$False, HelpMessage='Query all computer objects based on a distinguished name search base path.')]
     [switch]$Computers,
 
     [Parameter(ParameterSetName='Computers', Mandatory=$True, HelpMessage='Domain searchbase')]
@@ -53,6 +67,11 @@ param (
     [Parameter(ParameterSetName='ComputersCIM', Mandatory=$False, HelpMessage='Target domain')]
     [string]$Server = '',
 
+    [Parameter(ParameterSetName='List', Mandatory=$False, HelpMessage='Use alternate, non-default smart card credentials')]
+    [Parameter(ParameterSetName='Group', Mandatory=$False, HelpMessage='Use alternate, non-default smart card credentials')]
+    [Parameter(ParameterSetName='Computers', Mandatory=$False, HelpMessage='Use alternate, non-default smart card credentials')]
+    [Switch]$AltSmartCardCred,
+
     [Parameter(ParameterSetName='ListCIM',Mandatory=$True, HelpMessage='Run remote collection using a CIM session instead of PowerShell remoting.')]
     [Parameter(ParameterSetName='GroupCIM',Mandatory=$True, HelpMessage='Run remote collection using a CIM session instead of PowerShell remoting.')]
     [Parameter(ParameterSetName='ComputersCIM',Mandatory=$True, HelpMessage='Run remote collection using a CIM session instead of PowerShell remoting.')]
@@ -62,6 +81,148 @@ param (
     [ValidateSet('ShareOnly','NtfsOnly')]
     [string]$LimitCollection
 )
+
+
+Function Get-SmartCardCred{
+<#
+.SYNOPSIS
+Get certificate credentials from the user's certificate store.
+
+.DESCRIPTION
+Returns a PSCredential object of the user's selected certificate.
+
+.EXAMPLE
+Get-SmartCardCred
+UserName                                           Password
+--------                                           --------
+@@BVkEYkWiqJgd2d9xz3-5BiHs1cAN System.Security.SecureString
+
+.EXAMPLE
+$Cred = Get-SmartCardCred
+
+.OUTPUTS
+[System.Management.Automation.PSCredential]
+
+.NOTES
+Author: Joshua Chase
+Last Modified: 01 August 2018
+C# code used from https://github.com/bongiovimatthew-microsoft/pscredentialWithCert
+#>
+    [cmdletbinding()]
+    param()
+
+    $SmartCardCode = @"
+    // Copyright (c) Microsoft Corporation. All rights reserved.
+    // Licensed under the MIT License.
+
+    using System;
+    using System.Management.Automation;
+    using System.Runtime.InteropServices;
+    using System.Security;
+    using System.Security.Cryptography.X509Certificates;
+
+    namespace SmartCardLogon{
+
+        static class NativeMethods
+        {
+
+            public enum CRED_MARSHAL_TYPE
+            {
+                CertCredential = 1,
+                UsernameTargetCredential
+            }
+
+            [StructLayout(LayoutKind.Sequential)]
+            internal struct CERT_CREDENTIAL_INFO
+            {
+                public uint cbSize;
+                [MarshalAs(UnmanagedType.ByValArray, SizeConst = 20)]
+                public byte[] rgbHashOfCert;
+            }
+
+            [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+            public static extern bool CredMarshalCredential(
+                CRED_MARSHAL_TYPE CredType,
+                IntPtr Credential,
+                out IntPtr MarshaledCredential
+            );
+
+            [DllImport("advapi32.dll", SetLastError = true)]
+            public static extern bool CredFree([In] IntPtr buffer);
+
+        }
+
+        public class Certificate
+        {
+
+            public static PSCredential MarshalFlow(string thumbprint, SecureString pin)
+            {
+                //
+                // Set up the data struct
+                //
+                NativeMethods.CERT_CREDENTIAL_INFO certInfo = new NativeMethods.CERT_CREDENTIAL_INFO();
+                certInfo.cbSize = (uint)Marshal.SizeOf(typeof(NativeMethods.CERT_CREDENTIAL_INFO));
+
+                //
+                // Locate the certificate in the certificate store 
+                //
+                X509Certificate2 certCredential = new X509Certificate2();
+                X509Store userMyStore = new X509Store(StoreName.My, StoreLocation.CurrentUser);
+                userMyStore.Open(OpenFlags.ReadOnly);
+                X509Certificate2Collection certsReturned = userMyStore.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, false);
+                userMyStore.Close();
+
+                if (certsReturned.Count == 0)
+                {
+                    throw new Exception("Unable to find the specified certificate.");
+                }
+
+                //
+                // Marshal the certificate 
+                //
+                certCredential = certsReturned[0];
+                certInfo.rgbHashOfCert = certCredential.GetCertHash();
+                int size = Marshal.SizeOf(certInfo);
+                IntPtr pCertInfo = Marshal.AllocHGlobal(size);
+                Marshal.StructureToPtr(certInfo, pCertInfo, false);
+                IntPtr marshaledCredential = IntPtr.Zero;
+                bool result = NativeMethods.CredMarshalCredential(NativeMethods.CRED_MARSHAL_TYPE.CertCredential, pCertInfo, out marshaledCredential);
+
+                string certBlobForUsername = null;
+                PSCredential psCreds = null;
+
+                if (result)
+                {
+                    certBlobForUsername = Marshal.PtrToStringUni(marshaledCredential);
+                    psCreds = new PSCredential(certBlobForUsername, pin);
+                }
+
+                Marshal.FreeHGlobal(pCertInfo);
+                if (marshaledCredential != IntPtr.Zero)
+                {
+                    NativeMethods.CredFree(marshaledCredential);
+                }
+            
+                return psCreds;
+            }
+        }
+    }
+"@
+
+    Add-Type -TypeDefinition $SmartCardCode -Language CSharp
+    Add-Type -AssemblyName System.Security
+
+    $ValidCerts = [System.Security.Cryptography.X509Certificates.X509Certificate2[]](Get-ChildItem 'Cert:\CurrentUser\My')
+    $Cert = [System.Security.Cryptography.X509Certificates.X509Certificate2UI]::SelectFromCollection($ValidCerts, 'Personal Certificate Store', 'Choose a certificate', 0)
+
+    if ($Cert) {
+        $Pin = Read-Host "Enter your certificate PIN: " -AsSecureString
+    } else {
+        exit
+    }
+
+    [SmartCardLogon.Certificate]::MarshalFlow($Cert.Thumbprint, $Pin)
+}
 
 
 # Get share permissions
@@ -208,7 +369,7 @@ function Get-SmbNtfsPermissions {
 }
 
 
-# Converts the distinguised name format (e.g., CN=computer,OU=corporate,DC=domain,DC=com)
+# Converts the distinguished name format (e.g., CN=computer,OU=corporate,DC=domain,DC=com)
 # to the FQDN version (e.g., computer.domain.com).  Can handle the first CN entry and one 
 # or more DC entries.
 function Convert-DistinguishedNameToFQDN {
@@ -230,10 +391,13 @@ function Convert-DistinguishedNameToFQDN {
 }
 
 
+# target systems are determined by 1 of 3 options: predefined user provived list,
+# computer members of a security group, or computer objects in a domain/OU.
 if($SystemList) {
+    # target systems defined by use provided list, must be FQDNs
     $systems = $SystemList
 } elseif($GroupMembers) {
-    
+    # target systems determined based on an AD security group of computer objects
     $params = @{
         Identity = $($GroupMembers)
         Properties = 'Member'
@@ -246,7 +410,17 @@ if($SystemList) {
     $distinguisedNames = (Get-ADGroup @params).Member
     $systems = Convert-DistinguishedNameToFQDN $distinguisedNames
 } elseif($Computers) {
-    #temp
+    # target systems determined based on a domain or organizational unit
+    $params = @{
+        Filter = *
+        SearchBase = $SearchBase
+    }
+
+    if($Server) {
+        $params['Server'] = $Server
+    }
+
+    $systems = (Get-ADComputer @params).DNSHostName
 }
 
 
@@ -271,7 +445,16 @@ if($CimSession) {
 } else {
 
     # Run collection via PowerShell remoting
-    $sessions = New-PSSession -ComputerName $systems -SessionOption (New-PSSessionOption -NoMachineProfile)
+    $paramsSess = @{
+        ComputerName = $systems
+        SessionOption = (New-PSSessionOption -NoMachineProfile)
+    }
+
+    if($AltSmartCardCred) {
+        $paramsSess['Credential'] = (Get-SmartCardCred)
+    }
+
+    $sessions = New-PSSession @paramsSess
 }
 
 
