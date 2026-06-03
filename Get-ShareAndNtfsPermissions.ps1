@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Collect share and NTFS permissions of SMB network shares.
 .DESCRIPTION
@@ -412,15 +412,16 @@ if($SystemList) {
 } elseif($Computers) {
     # target systems determined based on a domain or organizational unit
     $params = @{
-        Filter = *
+        Filter = '*'
         SearchBase = $SearchBase
+        Properties = 'OperatingSystem'
     }
 
     if($Server) {
         $params['Server'] = $Server
     }
 
-    $systems = (Get-ADComputer @params).DNSHostName
+    $systems = (Get-ADComputer @params | Where-Object {$_.OperatingSystem -like "Windows*"}).DNSHostName
 }
 
 
