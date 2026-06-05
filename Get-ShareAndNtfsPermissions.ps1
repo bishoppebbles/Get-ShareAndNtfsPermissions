@@ -38,7 +38,7 @@
     .\Get-ShareAndNtfsPermissions.ps1 -Computers -SearchBase 'ou=servers,dc=domain,dc=com' -LimitCollection NtfsOnly
     Attempts to query all AD computer object SMB NTFS permissions only that are in the 'servers' OU.
 .NOTES
-    Version 0.06
+    Version 0.07
     Author: Sam Pursglove
     Last modified: 05 June 2026
 #>
@@ -57,8 +57,8 @@ param (
     [Parameter(ParameterSetName='ComputersCIM', Mandatory=$True, ValueFromPipeline=$False, HelpMessage='Query all computer objects based on a distinguished name search base path.')]
     [switch]$Computers,
 
-    [Parameter(ParameterSetName='Computers', Mandatory=$True, HelpMessage='Domain searchbase')]
-    [Parameter(ParameterSetName='ComputersCIM', Mandatory=$True, HelpMessage='Domain searchbase')]
+    [Parameter(ParameterSetName='Computers', Mandatory=$False, HelpMessage='Domain searchbase')]
+    [Parameter(ParameterSetName='ComputersCIM', Mandatory=$False, HelpMessage='Domain searchbase')]
     [string]$SearchBase = '',
 
     [Parameter(ParameterSetName='Group', Mandatory=$False, HelpMessage='Target domain')]
@@ -297,11 +297,10 @@ function Get-SmbNtfsPermissions {
                     $currentShare = $_.Name
                     "\\$computer\$currentShare" | Get-Acl -ErrorAction Stop
                 } catch [UnauthorizedAccessException] {
-                    [pscustomobject]@{
-                        AccessDenied     = $true
+                    New-Object PSObject -Property @{
                         PSComputerName   = $computer
                         Path             = $currentShare
-                    }  
+                    }
                 } 
             }
     # Collect NTFS permissions if PowerShell remoting is used
@@ -310,17 +309,20 @@ function Get-SmbNtfsPermissions {
             Where-Object {$_.ShareType -eq 'FileSystemDirectory'} | 
             ForEach-Object {
                 try {
-                    $computer = [System.Net.Dns]::GetHostByName($env:COMPUTERNAME).HostName
+                    $computer = (Resolve-DnsName -Name $env:COMPUTERNAME -Type A -ErrorAction SilentlyContinue)[0].Name
+                    if(-not $computer) {
+                        $computer = $env:COMPUTERNAME
+                    }
+                    
                     $currentShare = $_.Name
                     "\\$computer\$currentShare" | Get-Acl -ErrorAction Stop
                 
                 # Maintain a record of a SMB share even if permissions read access is denied
                 } catch [UnauthorizedAccessException] {
-                    [pscustomobject]@{
-                        AccessDenied     = $true
+                    New-Object PSObject -Property @{
                         PSComputerName   = $computer
                         Path             = $currentShare
-                    }  
+                    }
                 } 
             }
     }
@@ -328,8 +330,8 @@ function Get-SmbNtfsPermissions {
     # Output each unique NTFS permission record
     foreach($access in $accesses) {
 
-        # Confirm the object type is not AccessControl.FileSecurity from the Get-Acl cmdlet
-        if($access.GetType().Name -ne 'PSCustomObject') {
+        # Confirm the object type is AccessControl.FileSecurity from the Get-Acl cmdlet
+        if($access -is [System.Security.AccessControl.DirectorySecurity]) {
             foreach($permission in ($access.Access)) {
          
                 if($permission.FileSystemRights -match "[-0-9]+") {                  
@@ -338,9 +340,12 @@ function Get-SmbNtfsPermissions {
                     $fileSystemRights = $permission.FileSystemRights
                 }
 
-                [pscustomobject]@{
-                    PSComputerName   = ($access.Path -replace 'Microsoft.PowerShell.Core\\FileSystem::\\\\','').Split('\')[0]
-                    Path             = ($access.Path -replace 'Microsoft.PowerShell.Core\\FileSystem::\\\\','').Split('\')[1]
+                $cleanPath = $access.Path -replace 'Microsoft.PowerShell.Core\\FileSystem::\\\\',''
+                $pathElements = $cleanPath -split '\\'
+
+                @{
+                    PSComputerName   = $pathElements[0]
+                    Path             = $pathElements[1]
                     Owner            = $access.Owner
                     Group            = $access.Group
                     Identity         = $permission.IdentityReference
@@ -354,7 +359,7 @@ function Get-SmbNtfsPermissions {
 
         # Output a record of any SMB share even if the permissions read access was denied
         } else {       
-            [pscustomobject]@{
+            @{
                 PSComputerName   = $access.PSComputerName
                 Path             = $access.Path
                 Owner            = 'Access denied'
@@ -490,7 +495,17 @@ if($LimitCollection -ne 'ShareOnly') {
 
     if($outNtfs) {          
         $outNtfs | 
-            Select-Object PSComputerName,Path,Owner,Group,Identity,Access,Rights,IsInherited,InheritanceFlags,PropagationFlags |
+            Select-Object @{Name='PSComputerName'; Expression={$_.PSComputerName}},
+                          @{Name='Path'; Expression={$_.Path}},
+                          @{Name='Owner'; Expression={$_.Owner}},
+                          @{Name='Group'; Expression={$_.Group}},
+                          @{Name='Identity'; Expression={$_.Identity}},
+                          @{Name='Access'; Expression={$_.Access}},
+                          @{Name='Rights'; Expression={$_.Rights}},
+                          @{Name='IsInherited'; Expression={$_.IsInherited}},
+                          @{Name='InheritanceFlags'; Expression={$_.InheritanceFlags}},
+                          @{Name='PropagationFlags'; Expression={$_.PropagationFlags}} |
+            #Select-Object PSComputerName,Path,Owner,Group,Identity,Access,Rights,IsInherited,InheritanceFlags,PropagationFlags |
             Export-Csv -Path NtfsSharePermissions.csv -NoTypeInformation
     }
 }
