@@ -38,7 +38,7 @@
     .\Get-ShareAndNtfsPermissions.ps1 -Computers -SearchBase 'ou=servers,dc=domain,dc=com' -LimitCollection NtfsOnly
     Attempts to query all AD computer object SMB NTFS permissions only that are in the 'servers' OU.
 .NOTES
-    Version 0.07
+    Version 0.08
     Author: Sam Pursglove
     Last modified: 05 June 2026
 #>
@@ -57,8 +57,8 @@ param (
     [Parameter(ParameterSetName='ComputersCIM', Mandatory=$True, ValueFromPipeline=$False, HelpMessage='Query all computer objects based on a distinguished name search base path.')]
     [switch]$Computers,
 
-    [Parameter(ParameterSetName='Computers', Mandatory=$False, HelpMessage='Domain searchbase')]
-    [Parameter(ParameterSetName='ComputersCIM', Mandatory=$False, HelpMessage='Domain searchbase')]
+    [Parameter(ParameterSetName='Computers', Mandatory=$True, HelpMessage='Domain searchbase')]
+    [Parameter(ParameterSetName='ComputersCIM', Mandatory=$True, HelpMessage='Domain searchbase')]
     [string]$SearchBase = '',
 
     [Parameter(ParameterSetName='Group', Mandatory=$False, HelpMessage='Target domain')]
