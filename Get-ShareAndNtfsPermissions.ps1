@@ -1,12 +1,12 @@
-<#
+﻿<#
 .SYNOPSIS
     Collect share and NTFS permissions of SMB network shares.
 .DESCRIPTION
     Script to collection SMB share and NTFS permissions for remoted systems.  Privileged access is required for the targets.  By default collection is performed using PowerShell remoting but an option exists to alternatively collect using CIM sessions.  Targets can be designated using three different options.  1) User defined list of FQDN system names 2) An AD security group of AD computer objects 3) A domain of all computer objects or sub-organizational unit (OU).
 .PARAMETER SystemList
     Query target AD computer object permissions based on a user defined list of fully qualified domain name (FQDN) systems.
-.PARAMETER GroupMembers
-    Query target AD computer object permissions based on the membership of a group.
+.PARAMETER Group
+    Query target AD computer object permissions based on the membership of a security group.
 .PARAMETER Computers
     Query target AD computer object permissions based on a domain or sub-organizational units.
 .PARAMETER SearchBase
@@ -38,9 +38,9 @@
     .\Get-ShareAndNtfsPermissions.ps1 -Computers -SearchBase 'ou=servers,dc=domain,dc=com' -LimitCollection NtfsOnly
     Attempts to query all AD computer object SMB NTFS permissions only that are in the 'servers' OU.
 .NOTES
-    Version 0.05
+    Version 0.06
     Author: Sam Pursglove
-    Last modified: 03 June 2026
+    Last modified: 05 June 2026
 #>
 
 [CmdletBinding(DefaultParameterSetName='List')]
@@ -51,7 +51,7 @@ param (
 
     [Parameter(ParameterSetName='Group', Mandatory=$True, ValueFromPipeline=$False, HelpMessage='Enter the group name of computer objects to enumerate.')]
     [Parameter(ParameterSetName='GroupCIM', Mandatory=$True, ValueFromPipeline=$False, HelpMessage='Enter the group name of computer objects to enumerate.')]
-    [string]$GroupMembers = '',
+    [string]$Group = '',
 
     [Parameter(ParameterSetName='Computers', Mandatory=$True, ValueFromPipeline=$False, HelpMessage='Query all computer objects based on a distinguished name search base path.')]
     [Parameter(ParameterSetName='ComputersCIM', Mandatory=$True, ValueFromPipeline=$False, HelpMessage='Query all computer objects based on a distinguished name search base path.')]
@@ -239,21 +239,23 @@ function Get-SmbSharePermissions {
         $sharePath  = $share | Get-SmbShareAccess
 
         foreach($path in $sharePath) {
-            [pscustomobject]@{
-                PSComputerName       = $($path.PSComputerName)
+            # output as a hashtable and not a PSCustomObject to avoid Constrained Language Mode issues
+            @{
+                PSComputerName       = $($share.PSComputerName)
                 Name                 = $($path.Name)
+                AccountName          = $($path.AccountName)
                 AccessControlType    = $($path.AccessControlType)
                 AccessRight          = $($path.AccessRight)
-                Path                 = $($Share.Path)
-                Description          = $($Share.Description)
-                ShareType            = $($Share.ShareType)
-                ShareState           = $($Share.ShareState)
-                EncryptData          = $($Share.EncryptData)
-                CurrentUsers         = $($Share.CurrentUsers)
-                FolderEnumerationMode= $($Share.FolderEnumerationMode)
+                Path                 = $($share.Path)
+                Description          = $($share.Description)
+                ShareType            = $($share.ShareType)
+                ShareState           = $($share.ShareState)
+                EncryptData          = $($share.EncryptData)
+                CurrentUsers         = $($share.CurrentUsers)
+                FolderEnumerationMode= $($share.FolderEnumerationMode)
             }
         }
-    } 
+    }
 }
 
 
@@ -369,46 +371,37 @@ function Get-SmbNtfsPermissions {
 }
 
 
-# Converts the distinguished name format (e.g., CN=computer,OU=corporate,DC=domain,DC=com)
-# to the FQDN version (e.g., computer.domain.com).  Can handle the first CN entry and one 
-# or more DC entries.
-function Convert-DistinguishedNameToFQDN {
-    param($distinguishedNameList)
-
-    foreach($dn in $distinguishedNameList) {
-        $hostname = (
-            [regex]::Matches($dn, '(?i)CN=([^,]+)') |
-            Select-Object -Last 1
-        ).Groups[1].Value
-
-        $domain = (
-            [regex]::Matches($dn, '(?i)DC=([^,]+)') |
-            ForEach-Object { $_.Groups[1].Value }
-        ) -join '.'
-
-        ("$hostname.$domain").ToLower()
-    }
-}
-
-
 # target systems are determined by 1 of 3 options: predefined user provived list,
 # computer members of a security group, or computer objects in a domain/OU.
 if($SystemList) {
     # target systems defined by use provided list, must be FQDNs
     $systems = $SystemList
-} elseif($GroupMembers) {
+} elseif($Group) {
     # target systems determined based on an AD security group of computer objects
-    $params = @{
-        Identity = $($GroupMembers)
+    $paramsGroup = @{
+        Identity = $($Group)
         Properties = 'Member'
     }
 
-    if($Server) {
-        $params['Server'] = $Server
+    $paramsComp = @{
+        Properties = 'OperatingSystem'
     }
 
-    $distinguisedNames = (Get-ADGroup @params).Member
-    $systems = Convert-DistinguishedNameToFQDN $distinguisedNames
+    if($Server) {
+        $paramsGroup['Server'] = $Server
+        $paramsComp['Server'] = $Server
+    }
+
+    # get all the group members
+    $distinguishedNames = (Get-ADGroup @paramsGroup).Member
+    
+    # Get the DNSHostName foreach group member (returns a distinguished name version from the group)
+    [System.Collections.ArrayList]$systems = @()
+
+    foreach($name in $distinguishedNames) {
+        $paramsComp['Identity'] = $name
+        $systems.Add((Get-ADComputer @paramsComp | Where-Object {$_.OperatingSystem -like "Windows*"}).DNSHostName) | Out-Null
+    }
 } elseif($Computers) {
     # target systems determined based on a domain or organizational unit
     $params = @{
@@ -467,9 +460,23 @@ if($LimitCollection -ne 'NtfsOnly') {
         $outShare = Invoke-Command -Session $sessions -ScriptBlock ${function:Get-SmbSharePermissions}
     }
     
-    $outShare | 
-        Select-Object PSComputerName,Name,AccessControlType,AccessRight,Path,Description,ShareType,ShareState,EncryptData,CurrentUsers,FolderEnumerationMode | 
-        Export-Csv -Path SmbSharePermissions.csv -NoTypeInformation
+    if($outShare) {
+        $outShare | 
+            # This is used to avoid Constrained Language Mode issues
+            Select-Object @{Name='PSComputerName'; Expression={$_.PSComputerName}},
+                          @{Name='Name'; Expression={$_.Name}},
+                          @{Name='AccountName'; Expression={$_.AccountName}},
+                          @{Name='AccessControlType'; Expression={$_.AccessControlType}},
+                          @{Name='AccessRight'; Expression={$_.AccessRight}},
+                          @{Name='Path'; Expression={$_.Path}},
+                          @{Name='Description'; Expression={$_.Description}},
+                          @{Name='ShareType'; Expression={$_.ShareType}},
+                          @{Name='ShareState'; Expression={$_.ShareState}},
+                          @{Name='EncryptData'; Expression={$_.EncryptData}},
+                          @{Name='CurrentUsers'; Expression={$_.CurrentUsers}},
+                          @{Name='FolderEnumerationMode'; Expression={$_.FolderEnumerationMode}} | 
+            Export-Csv -Path SmbSharePermissions.csv -NoTypeInformation
+    }
 }
 
 
@@ -480,10 +487,12 @@ if($LimitCollection -ne 'ShareOnly') {
     } else {
         $outNtfs = Invoke-Command -Session $sessions -ScriptBlock ${function:Get-SmbNtfsPermissions}
     }
-          
-    $outNtfs | 
-        Select-Object PSComputerName,Path,Owner,Group,Identity,Access,Rights,IsInherited,InheritanceFlags,PropagationFlags |
-        Export-Csv -Path NtfsSharePermissions.csv -NoTypeInformation
+
+    if($outNtfs) {          
+        $outNtfs | 
+            Select-Object PSComputerName,Path,Owner,Group,Identity,Access,Rights,IsInherited,InheritanceFlags,PropagationFlags |
+            Export-Csv -Path NtfsSharePermissions.csv -NoTypeInformation
+    }
 }
 
 if(-not $CimSession) {
