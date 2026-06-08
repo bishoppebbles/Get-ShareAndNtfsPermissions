@@ -38,9 +38,9 @@
     .\Get-ShareAndNtfsPermissions.ps1 -Computers -SearchBase 'ou=servers,dc=domain,dc=com' -LimitCollection NtfsOnly
     Attempts to query all AD computer object SMB NTFS permissions only that are in the 'servers' OU.
 .NOTES
-    Version 0.08
+    Version 0.09
     Author: Sam Pursglove
-    Last modified: 05 June 2026
+    Last modified: 08 June 2026
 #>
 
 [CmdletBinding(DefaultParameterSetName='List')]
@@ -309,6 +309,7 @@ function Get-SmbNtfsPermissions {
             Where-Object {$_.ShareType -eq 'FileSystemDirectory'} | 
             ForEach-Object {
                 try {
+                    # added to avoid Constrained Language Mode issues
                     $computer = (Resolve-DnsName -Name $env:COMPUTERNAME -Type A -ErrorAction SilentlyContinue)[0].Name
                     if(-not $computer) {
                         $computer = $env:COMPUTERNAME
@@ -317,7 +318,7 @@ function Get-SmbNtfsPermissions {
                     $currentShare = $_.Name
                     "\\$computer\$currentShare" | Get-Acl -ErrorAction Stop
                 
-                # Maintain a record of a SMB share even if permissions read access is denied
+                # Maintain a record of a SMB share even if NTFS permissions read access is denied
                 } catch [UnauthorizedAccessException] {
                     New-Object PSObject -Property @{
                         PSComputerName   = $computer
@@ -357,7 +358,7 @@ function Get-SmbNtfsPermissions {
                 }
             }
 
-        # Output a record of any SMB share even if the permissions read access was denied
+        # Output a record of any SMB share even if the NTFS permissions read access was denied
         } else {       
             @{
                 PSComputerName   = $access.PSComputerName
@@ -467,7 +468,7 @@ if($LimitCollection -ne 'NtfsOnly') {
     
     if($outShare) {
         $outShare | 
-            # This is used to avoid Constrained Language Mode issues
+            # Hash table returned to avoid Constrained Language Mode issues with PSCustomObject
             Select-Object @{Name='PSComputerName'; Expression={$_.PSComputerName}},
                           @{Name='Name'; Expression={$_.Name}},
                           @{Name='AccountName'; Expression={$_.AccountName}},
@@ -495,6 +496,7 @@ if($LimitCollection -ne 'ShareOnly') {
 
     if($outNtfs) {          
         $outNtfs | 
+            # Hash table returned to avoid Constrained Language Mode issues with PSCustomObject
             Select-Object @{Name='PSComputerName'; Expression={$_.PSComputerName}},
                           @{Name='Path'; Expression={$_.Path}},
                           @{Name='Owner'; Expression={$_.Owner}},
@@ -505,7 +507,6 @@ if($LimitCollection -ne 'ShareOnly') {
                           @{Name='IsInherited'; Expression={$_.IsInherited}},
                           @{Name='InheritanceFlags'; Expression={$_.InheritanceFlags}},
                           @{Name='PropagationFlags'; Expression={$_.PropagationFlags}} |
-            #Select-Object PSComputerName,Path,Owner,Group,Identity,Access,Rights,IsInherited,InheritanceFlags,PropagationFlags |
             Export-Csv -Path NtfsSharePermissions.csv -NoTypeInformation
     }
 }
