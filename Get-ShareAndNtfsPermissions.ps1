@@ -2,7 +2,7 @@
 .SYNOPSIS
     Collect share and NTFS permissions of SMB network shares.
 .DESCRIPTION
-    Script to collection SMB share and NTFS permissions for remoted systems.  Privileged access is required for the targets.  By default collection is performed using PowerShell remoting but an option exists to alternatively collect using CIM sessions.  Targets can be designated using three different options.  1) User defined list of FQDN system names 2) An AD security group of AD computer objects 3) A domain of all computer objects or sub-organizational unit (OU).
+    Script to collect SMB share and NTFS permissions for remote systems.  Privileged access is required for the targets.  By default collection is performed using PowerShell remoting but an option exists to alternatively collect using CIM sessions (with WSMAN, not DCOM).  Targets can be designated using three different options.  1) User defined list of FQDN system names 2) An AD security group of AD computer objects 3) A domain of all computer objects or sub-organizational unit (OU).
 .PARAMETER SystemList
     Query target AD computer object permissions based on a user defined list of fully qualified domain name (FQDN) systems.
 .PARAMETER Group
@@ -38,7 +38,7 @@
     .\Get-ShareAndNtfsPermissions.ps1 -Computers -SearchBase 'ou=servers,dc=domain,dc=com' -LimitCollection NtfsOnly
     Attempts to query all AD computer object SMB NTFS permissions only that are in the 'servers' OU.
 .NOTES
-    Version 0.09
+    Version 0.10
     Author: Sam Pursglove
     Last modified: 08 June 2026
 #>
