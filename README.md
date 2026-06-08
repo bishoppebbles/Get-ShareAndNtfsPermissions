@@ -28,7 +28,7 @@ The targeting of systems for collection is different than with `Get-ServerShareP
 
     b) If you’re trying to run cross domain include the -Server option:
 
-      * `.\Get-ShareAndNtfsPermissions.ps1 -Group 'Servers Group' -Server connect.sbu`
+      * `.\Get-ShareAndNtfsPermissions.ps1 -Group 'Servers Group' -Server domain.com`
 
 3) **Computers option**
 
