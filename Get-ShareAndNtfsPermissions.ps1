@@ -38,9 +38,9 @@
     .\Get-ShareAndNtfsPermissions.ps1 -Computers -SearchBase 'ou=servers,dc=domain,dc=com' -LimitCollection NtfsOnly
     Attempts to query all AD computer object SMB NTFS permissions only that are in the 'servers' OU.
 .NOTES
-    Version 0.10
+    Version 0.11
     Author: Sam Pursglove
-    Last modified: 08 June 2026
+    Last modified: 23 June 2026
 #>
 
 [CmdletBinding(DefaultParameterSetName='List')]
@@ -272,9 +272,9 @@ function Get-SmbNtfsPermissions {
         [int32]'0x02000000' = 'MaximumAllowed'
         [int32]'0x01000000' = 'AccessSystemSecurity'
         [int32]'0x00100000' = 'Synchronize'
-        [int32]'0x00080000' = 'WriteOwner'
-        [int32]'0x00040000' = 'WriteDAC'
-        [int32]'0x00020000' = 'ReadControl'
+        [int32]'0x00080000' = 'TakeOwnership'	  # using the Windows GUI version for 'WriteOwner'
+        [int32]'0x00040000' = 'ChangePermissions' # using the Windows GUI version for 'WriteDAC'
+        [int32]'0x00020000' = 'ReadPermissions'   # using the Windows GUI version for 'ReadControl'
         [int32]'0x00010000' = 'Delete'
         [int32]'0x00000100' = 'WriteAttributes'
         [int32]'0x00000080' = 'ReadAttributes'
