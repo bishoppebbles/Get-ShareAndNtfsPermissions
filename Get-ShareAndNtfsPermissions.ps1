@@ -38,9 +38,9 @@
     .\Get-ShareAndNtfsPermissions.ps1 -Computers -SearchBase 'ou=servers,dc=domain,dc=com' -LimitCollection NtfsOnly
     Attempts to query all AD computer object SMB NTFS permissions only that are in the 'servers' OU.
 .NOTES
-    Version 0.11
+    Version 0.12
     Author: Sam Pursglove
-    Last modified: 23 June 2026
+    Last modified: 28 July 2026
 #>
 
 [CmdletBinding(DefaultParameterSetName='List')]
@@ -83,7 +83,7 @@ param (
 )
 
 
-Function Get-SmartCardCred{
+Function Get-SmartCardCred {
 <#
 .SYNOPSIS
 Get certificate credentials from the user's certificate store.
@@ -111,105 +111,112 @@ C# code used from https://github.com/bongiovimatthew-microsoft/pscredentialWithC
     [cmdletbinding()]
     param()
 
-    $SmartCardCode = @"
-    // Copyright (c) Microsoft Corporation. All rights reserved.
-    // Licensed under the MIT License.
+    # Ensure the type does not already exists in memory
+    if (-not ('SmartCardLogon.Certificate' -as [type])) {
+        
+        $SmartCardCode = @"
+        // Copyright (c) Microsoft Corporation. All rights reserved.
+        // Licensed under the MIT License.
 
-    using System;
-    using System.Management.Automation;
-    using System.Runtime.InteropServices;
-    using System.Security;
-    using System.Security.Cryptography.X509Certificates;
+        using System;
+        using System.Management.Automation;
+        using System.Runtime.InteropServices;
+        using System.Security;
+        using System.Security.Cryptography.X509Certificates;
 
-    namespace SmartCardLogon{
+        namespace SmartCardLogon{
 
-        static class NativeMethods
-        {
-
-            public enum CRED_MARSHAL_TYPE
+            static class NativeMethods
             {
-                CertCredential = 1,
-                UsernameTargetCredential
+
+                public enum CRED_MARSHAL_TYPE
+                {
+                    CertCredential = 1,
+                    UsernameTargetCredential
+                }
+
+                [StructLayout(LayoutKind.Sequential)]
+                internal struct CERT_CREDENTIAL_INFO
+                {
+                    public uint cbSize;
+                    [MarshalAs(UnmanagedType.ByValArray, SizeConst = 20)]
+                    public byte[] rgbHashOfCert;
+                }
+
+                [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+                public static extern bool CredMarshalCredential(
+                    CRED_MARSHAL_TYPE CredType,
+                    IntPtr Credential,
+                    out IntPtr MarshaledCredential
+                );
+
+                [DllImport("advapi32.dll", SetLastError = true)]
+                public static extern bool CredFree([In] IntPtr buffer);
+
             }
 
-            [StructLayout(LayoutKind.Sequential)]
-            internal struct CERT_CREDENTIAL_INFO
+            public class Certificate
             {
-                public uint cbSize;
-                [MarshalAs(UnmanagedType.ByValArray, SizeConst = 20)]
-                public byte[] rgbHashOfCert;
-            }
 
-            [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-            public static extern bool CredMarshalCredential(
-                CRED_MARSHAL_TYPE CredType,
-                IntPtr Credential,
-                out IntPtr MarshaledCredential
-            );
-
-            [DllImport("advapi32.dll", SetLastError = true)]
-            public static extern bool CredFree([In] IntPtr buffer);
-
-        }
-
-        public class Certificate
-        {
-
-            public static PSCredential MarshalFlow(string thumbprint, SecureString pin)
-            {
-                //
-                // Set up the data struct
-                //
-                NativeMethods.CERT_CREDENTIAL_INFO certInfo = new NativeMethods.CERT_CREDENTIAL_INFO();
-                certInfo.cbSize = (uint)Marshal.SizeOf(typeof(NativeMethods.CERT_CREDENTIAL_INFO));
-
-                //
-                // Locate the certificate in the certificate store 
-                //
-                X509Certificate2 certCredential = new X509Certificate2();
-                X509Store userMyStore = new X509Store(StoreName.My, StoreLocation.CurrentUser);
-                userMyStore.Open(OpenFlags.ReadOnly);
-                X509Certificate2Collection certsReturned = userMyStore.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, false);
-                userMyStore.Close();
-
-                if (certsReturned.Count == 0)
+                public static PSCredential MarshalFlow(string thumbprint, SecureString pin)
                 {
-                    throw new Exception("Unable to find the specified certificate.");
-                }
+                    //
+                    // Set up the data struct
+                    //
+                    NativeMethods.CERT_CREDENTIAL_INFO certInfo = new NativeMethods.CERT_CREDENTIAL_INFO();
+                    certInfo.cbSize = (uint)Marshal.SizeOf(typeof(NativeMethods.CERT_CREDENTIAL_INFO));
 
-                //
-                // Marshal the certificate 
-                //
-                certCredential = certsReturned[0];
-                certInfo.rgbHashOfCert = certCredential.GetCertHash();
-                int size = Marshal.SizeOf(certInfo);
-                IntPtr pCertInfo = Marshal.AllocHGlobal(size);
-                Marshal.StructureToPtr(certInfo, pCertInfo, false);
-                IntPtr marshaledCredential = IntPtr.Zero;
-                bool result = NativeMethods.CredMarshalCredential(NativeMethods.CRED_MARSHAL_TYPE.CertCredential, pCertInfo, out marshaledCredential);
+                    //
+                    // Locate the certificate in the certificate store 
+                    //
+                    X509Certificate2 certCredential = new X509Certificate2();
+                    X509Store userMyStore = new X509Store(StoreName.My, StoreLocation.CurrentUser);
+                    userMyStore.Open(OpenFlags.ReadOnly);
+                    X509Certificate2Collection certsReturned = userMyStore.Certificates.Find(X509FindType.FindByThumbprint, thumbprint, false);
+                    userMyStore.Close();
 
-                string certBlobForUsername = null;
-                PSCredential psCreds = null;
+                    if (certsReturned.Count == 0)
+                    {
+                        throw new Exception("Unable to find the specified certificate.");
+                    }
 
-                if (result)
-                {
-                    certBlobForUsername = Marshal.PtrToStringUni(marshaledCredential);
-                    psCreds = new PSCredential(certBlobForUsername, pin);
-                }
+                    //
+                    // Marshal the certificate 
+                    //
+                    certCredential = certsReturned[0];
+                    certInfo.rgbHashOfCert = certCredential.GetCertHash();
+                    int size = Marshal.SizeOf(certInfo);
+                    IntPtr pCertInfo = Marshal.AllocHGlobal(size);
+                    Marshal.StructureToPtr(certInfo, pCertInfo, false);
+                    IntPtr marshaledCredential = IntPtr.Zero;
+                    bool result = NativeMethods.CredMarshalCredential(NativeMethods.CRED_MARSHAL_TYPE.CertCredential, pCertInfo, out marshaledCredential);
 
-                Marshal.FreeHGlobal(pCertInfo);
-                if (marshaledCredential != IntPtr.Zero)
-                {
-                    NativeMethods.CredFree(marshaledCredential);
-                }
+                    string certBlobForUsername = null;
+                    PSCredential psCreds = null;
+
+                    if (result)
+                    {
+                        certBlobForUsername = Marshal.PtrToStringUni(marshaledCredential);
+                        psCreds = new PSCredential(certBlobForUsername, pin);
+                    }
+
+                    Marshal.FreeHGlobal(pCertInfo);
+                    if (marshaledCredential != IntPtr.Zero)
+                    {
+                        NativeMethods.CredFree(marshaledCredential);
+                    }
             
-                return psCreds;
+                    return psCreds;
+                }
             }
         }
-    }
 "@
 
-    Add-Type -TypeDefinition $SmartCardCode -Language CSharp
+        # Only compile if the type wasn't found
+        Add-Type -TypeDefinition $SmartCardCode -Language CSharp
+    }
+
+    # This is safe to run multiple times, so it can stay outside the if block
     Add-Type -AssemblyName System.Security
 
     $ValidCerts = [System.Security.Cryptography.X509Certificates.X509Certificate2[]](Get-ChildItem 'Cert:\CurrentUser\My')
@@ -223,7 +230,6 @@ C# code used from https://github.com/bongiovimatthew-microsoft/pscredentialWithC
 
     [SmartCardLogon.Certificate]::MarshalFlow($Cert.Thumbprint, $Pin)
 }
-
 
 # Get share permissions
 function Get-SmbSharePermissions {
